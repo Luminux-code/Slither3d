@@ -23,11 +23,18 @@
 </head>
 <body>
 
-<div id="score">Score: 0</div>
-<div id="length">Length: 6</div>
-<div id="players">Players: 1</div>
-<div id="timer">Time: 0s</div>
-<div id="overlay">Click para empezar</div>
+  <div id="score">Score: 0</div>
+  <div id="length">Length: 6</div>
+  <div id="players">Players: 1</div>
+  <div id="timer">Time: 0s</div>
+  <div id="ranking" style="top:130px; left:10px; position:absolute; color:white;"></div>
+  <div id="overlay">
+    <div>Slither 3D</div>
+    <input id="nameInput" placeholder="Tu nombre" style="font-size:20px; margin:10px;">
+    <button style="font-size:20px;">Empezar</button>
+  </div>
+
+
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
 <script>
@@ -47,6 +54,9 @@
   scene.add(player);
 
   const segments = [];
+  let wormMesh = null;
+  let wormGeometry = null;
+
   for(let i=0;i<5;i++){
     const geom = new THREE.SphereGeometry(0.4,16,16);
     const mat = new THREE.MeshBasicMaterial({color:0x00ff00});
@@ -86,38 +96,60 @@
   // ---------- WEBSOCKET ----------
   const socket = new WebSocket("wss://triumphantly-unpublic-brooklyn.ngrok-free.dev");
   const otherPlayers = {};
+  let playerName = "none";
   const myId = Date.now() + Math.random();
+  const rankingDiv = document.getElementById("ranking");
 
-    socket.onopen = () => {
-    socket.send(JSON.stringify({ type: "init", id: myId }));
-    };
 
   socket.onmessage = event => {
     const data = JSON.parse(event.data);
-    for(let id in data){
+
+    // -------- RANKING --------
+    if(data.ranking){
+      rankingDiv.innerHTML = "<b>Ranking</b><br>";
+      data.ranking.forEach((p,i)=>{
+        rankingDiv.innerHTML += `${i+1}. ${p.name}: ${p.score}<br>`;
+      });
+    }
+
+    // -------- OTROS JUGADORES --------
+    for(let id in data.players){
       if(id == myId) continue;
-      const p = data[id];
+
+      const p = data.players[id].body;
+      if(!p || p.length === 0) continue;
+
       if(!otherPlayers[id]){
-        const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.5,16,16),
-                                    new THREE.MeshBasicMaterial({color:0xff0000}));
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(0.5,16,16),
+          new THREE.MeshBasicMaterial({color:0xff0000})
+        );
         scene.add(mesh);
+
         const segs = [];
         for(let i=1;i<p.length;i++){
-          const s = new THREE.Mesh(new THREE.SphereGeometry(0.4,16,16),
-                                   new THREE.MeshBasicMaterial({color:0xff0000}));
-          s.position.set(p[i].x,p[i].y,p[i].z);
+          const s = new THREE.Mesh(
+            new THREE.SphereGeometry(0.4,16,16),
+            new THREE.MeshBasicMaterial({color:0xff0000})
+          );
           scene.add(s);
           segs.push(s);
         }
+
         otherPlayers[id] = {mesh,segs};
       }
+
       otherPlayers[id].mesh.position.set(p[0].x,p[0].y,p[0].z);
       otherPlayers[id].mesh.rotation.y = p[0].rotationY;
+
       for(let i=1;i<p.length;i++){
-        otherPlayers[id].segs[i-1].position.lerp(new THREE.Vector3(p[i].x,p[i].y,p[i].z),0.3);
+        otherPlayers[id].segs[i-1].position.lerp(
+          new THREE.Vector3(p[i].x,p[i].y,p[i].z), 0.3
+        );
       }
     }
   };
+
 
   function sendPositions(){
     if(socket.readyState !== WebSocket.OPEN) return;
@@ -136,10 +168,15 @@
     const geom = new THREE.SphereGeometry(special?0.5:0.3,8,8);
     const mat = new THREE.MeshBasicMaterial({color:special?0xff00ff:0xffff00});
     const mesh = new THREE.Mesh(geom, mat);
+
+    mesh.userData.special = special; // MARCA SI ES ESPECIAL
+
     mesh.position.set((Math.random()-0.5)*50,0,(Math.random()-0.5)*50);
     scene.add(mesh);
     foodItems.push(mesh);
   }
+
+
   for(let i=0;i<20;i++) spawnFood();
   setInterval(()=>spawnFood(true),10000); // comida especial cada 10s
 
@@ -166,23 +203,93 @@
   const overlay = document.getElementById("overlay");
 
   let gameStarted = false;
-  overlay.addEventListener("click",()=>{
+
+  overlay.querySelector("button").addEventListener("click",()=>{
+    const input = document.getElementById("nameInput");
+    playerName = input.value || "Anon";
+
     overlay.style.display = "none";
+    overlay.querySelector("button").innerText = "Reaparecer";
+
+    socket.send(JSON.stringify({
+      type: "init",
+      id: myId,
+      name: playerName
+    }));
+
     startGame();
   });
 
-  function startGame(){
-        gameStarted = true;
-        startTime = Date.now();
-        score = 0;
-        segments.splice(5);
+  function dropFoodFromWorm(){
+    // comida por cada segmento
+    for(let s of segments){
+      const geom = new THREE.SphereGeometry(0.3,8,8);
+      const mat = new THREE.MeshBasicMaterial({color:0xffff00});
+      const food = new THREE.Mesh(geom, mat);
 
-        // Spawn aleatorio
-        const boundary = 25; // ya definido arriba, asegúrate que coincida
-        const startX = (Math.random()*2 - 1) * boundary;
-        const startZ = (Math.random()*2 - 1) * boundary;
-        player.position.set(startX, 0, startZ);
+      food.userData.special = false;
+
+      food.position.copy(s.position);
+      scene.add(food);
+      foodItems.push(food);
     }
+
+    // comida extra en la cabeza
+    for(let i=0;i<3;i++){
+      spawnFood(true); // un poco de comida especial
+    }
+  }
+
+
+  function resetWorm(){
+    // borrar tubo
+    if(wormMesh){
+      scene.remove(wormMesh);
+      wormGeometry.dispose();
+      wormMesh = null;
+    }
+
+    // borrar segmentos
+    segments.forEach(s => scene.remove(s));
+    segments.length = 0;
+
+    // recrear cuerpo inicial
+    for(let i=0;i<5;i++){
+      const geom = new THREE.SphereGeometry(0.4,16,16);
+      const mat = new THREE.MeshBasicMaterial({color:0x00ff00});
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.copy(player.position);
+      mesh.visible = false;
+      scene.add(mesh);
+      segments.push(mesh);
+    }
+  }
+
+  function killPlayer(){
+    dropFoodFromWorm();
+    resetWorm();
+    resetPlayer();
+  }
+
+  function startGame(){
+    gameStarted = true;
+    startTime = Date.now();
+    score = 0;
+
+    player.position.set(
+      (Math.random()-0.5)*50,
+      0,
+      (Math.random()-0.5)*50
+    );
+
+    resetWorm();
+
+    invincible = true;
+    setTimeout(() => invincible = false, 2000);
+
+  }
+
+
 
 
   // ---------- ANIMACIÓN ----------
@@ -192,6 +299,46 @@
   const target = new THREE.Vector3();
   const boundary = 25;
   let startTime = Date.now();
+
+  function updateWormMesh(){
+    const points = [];
+
+    // cabeza
+    points.push(player.position.clone());
+
+    // cuerpo
+    for(let s of segments){
+      points.push(s.position.clone());
+    }
+
+    if(points.length < 2) return;
+
+    const curve = new THREE.CatmullRomCurve3(points);
+
+    if(wormMesh){
+      scene.remove(wormMesh);
+      wormGeometry.dispose();
+    }
+
+    wormGeometry = new THREE.TubeGeometry(
+      curve,
+      64,     // suavidad
+      0.35,   // grosor
+      8,
+      false
+    );
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x00ff00
+    });
+
+    wormMesh = new THREE.Mesh(wormGeometry, material);
+    scene.add(wormMesh);
+  }
+
+  player.visible = false;
+  segments.forEach(s => s.visible = false);
+
 
   function animate(){
     requestAnimationFrame(animate);
@@ -218,6 +365,8 @@
       segments[i].position.lerp(segments[i-1].position,0.2);
     }
     segments[0].position.lerp(player.position,0.2);
+    updateWormMesh();
+
 
     // actualizar cámara
     const camOffset = new THREE.Vector3(0,3,-5);
@@ -226,23 +375,31 @@
     camera.lookAt(player.position);
 
     // colisiones con comida
-    for(let i=foodItems.length-1;i>=0;i--){
-      if(player.position.distanceTo(foodItems[i].position)<0.6){
-        scene.remove(foodItems[i]);
-        foodItems.splice(i,1);
+    for(let i = foodItems.length - 1; i >= 0; i--){
+      const food = foodItems[i];
 
+      if(player.position.distanceTo(food.position) < 0.6){
+        const isSpecial = food.userData.special;
+
+        scene.remove(food);
+        foodItems.splice(i, 1);
+
+        // crecer gusano
         const geom = new THREE.SphereGeometry(0.4,16,16);
         const mat = new THREE.MeshBasicMaterial({color:0x00ff00});
         const mesh = new THREE.Mesh(geom, mat);
-        mesh.position.copy(segments[segments.length-1].position);
+        mesh.position.copy(segments[segments.length - 1].position);
         scene.add(mesh);
         segments.push(mesh);
 
-        score += 1;
+        // puntos
+        score += isSpecial ? 5 : 1;
         scoreDiv.innerText = `Score: ${score}`;
+
         spawnFood();
       }
     }
+
 
     // colisiones con power-ups
     for(let i=powerUps.length-1;i>=0;i--){
@@ -259,20 +416,26 @@
       }
     }
 
-    // colisiones con otros jugadores
+    // colisiones con otros jugadores (muerte instantánea)
     for(let id in otherPlayers){
       const other = otherPlayers[id];
+
+      // cabeza vs cabeza
+      if(player.position.distanceTo(other.mesh.position) < 0.5 && !invincible){
+        killPlayer();
+        return;
+      }
+
+      // cabeza vs cuerpo
       for(let i=0;i<other.segs.length;i++){
-        if(player.position.distanceTo(other.segs[i].position)<0.5 && !invincible){
-          segments.pop();
-          if(segments.length===0) resetPlayer();
+        if(player.position.distanceTo(other.segs[i].position) < 0.5 && !invincible){
+          killPlayer();
+          return;
         }
       }
-      if(player.position.distanceTo(other.mesh.position)<0.5 && !invincible){
-        segments.pop();
-        if(segments.length===0) resetPlayer();
-      }
     }
+
+
 
     // actualizar UI
     lengthDiv.innerText = `Length: ${segments.length+1}`;
@@ -283,20 +446,11 @@
   }
 
   function resetPlayer(){
-    alert("¡Colisión! Game Over");
-    if(score>highScore) highScore = score;
-    console.log("High Score:", highScore);
-
-    player.position.set(0,0,0);
-    for(let i=0;i<segments.length;i++){
-      segments[i].position.copy(player.position);
-    }
-    segments.splice(5);
-    score = 0;
-    scoreDiv.innerText = `Score: ${score}`;
-    overlay.style.display="flex";
-    gameStarted=false;
+    gameStarted = false;
+    overlay.style.display = "flex";
   }
+
+
 
   animate();
 
