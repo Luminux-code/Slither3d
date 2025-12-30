@@ -1,23 +1,35 @@
 const WebSocket = require("ws");
-const wss = new WebSocket.Server({port:3000});
-console.log("Servidor WebSocket en puerto 3000");
-
+const wss = new WebSocket.Server({ port: 3000 });
 const players = {};
 
-wss.on("connection", ws=>{
-  const id = Date.now()+Math.random();
-  players[id]=[];
+wss.on("connection", ws => {
 
-  ws.on("message", msg=>{
-    const data = JSON.parse(msg); // data = [cabeza, seg1, seg2,...]
-    players[id]=data;
+  ws.on("message", msg => {
+    const data = JSON.parse(msg);
+    if(data.type === "init") {
+      ws.playerId = data.id;
+      players[ws.playerId] = [];
+      console.log("Jugador conectado:", ws.playerId);
+    } else if(ws.playerId) {
+      players[ws.playerId] = data; // posiciones del jugador
+    }
   });
 
-  ws.on("close",()=>{ delete players[id]; });
+  ws.on("close", () => {
+    if(ws.playerId) {
+      delete players[ws.playerId];
+      console.log("Jugador desconectado:", ws.playerId);
+    }
+  });
 
-  const interval = setInterval(()=>{
-    ws.send(JSON.stringify(players));
-  },50);
-
-  ws.on("close",()=>clearInterval(interval));
 });
+
+// Broadcast a todos los clientes
+setInterval(() => {
+  const snapshot = JSON.stringify(players);
+  wss.clients.forEach(client => {
+    if(client.readyState === WebSocket.OPEN) {
+      client.send(snapshot);
+    }
+  });
+}, 50);

@@ -84,11 +84,13 @@
   }
 
   // ---------- WEBSOCKET ----------
-  const socket = new WebSocket("wss://triumphantly-unpublic-brooklyn.ngrok-free.dev");
+  const socket = new WebSocket("ws://localhost:3000");
   const otherPlayers = {};
   const myId = Date.now() + Math.random();
 
-  socket.onopen = () => console.log("Conectado al servidor");
+    socket.onopen = () => {
+    socket.send(JSON.stringify({ type: "init", id: myId }));
+    };
 
   socket.onmessage = event => {
     const data = JSON.parse(event.data);
@@ -122,11 +124,11 @@
     const data = [];
     data.push({x:player.position.x, y:player.position.y, z:player.position.z, rotationY:player.rotation.y, score});
     for(let i=0;i<segments.length;i++){
-      data.push({x:segments[i].position.x, y:segments[i].position.y, z:segments[i].position.z});
+        data.push({x:segments[i].position.x, y:segments[i].position.y, z:segments[i].position.z});
     }
     socket.send(JSON.stringify(data));
-  }
-  setInterval(sendPositions,50);
+    }
+    setInterval(sendPositions, 50);
 
   // ---------- COMIDA ----------
   const foodItems = [];
@@ -170,12 +172,18 @@
   });
 
   function startGame(){
-    gameStarted = true;
-    startTime = Date.now();
-    score = 0;
-    segments.splice(5);
-    player.position.set(0,0,0);
-  }
+        gameStarted = true;
+        startTime = Date.now();
+        score = 0;
+        segments.splice(5);
+
+        // Spawn aleatorio
+        const boundary = 25; // ya definido arriba, asegúrate que coincida
+        const startX = (Math.random()*2 - 1) * boundary;
+        const startZ = (Math.random()*2 - 1) * boundary;
+        player.position.set(startX, 0, startZ);
+    }
+
 
   // ---------- ANIMACIÓN ----------
   let score = 0;
