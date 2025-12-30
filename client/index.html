@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Slither 3D Multiplayer</title>
+  <style>
+    body {margin:0; overflow:hidden;}
+    canvas {display:block;}
+    #score, #length, #players, #timer {
+      position:absolute; color:white; font-size:20px;
+    }
+    #score {top:10px; left:10px;}
+    #length {top:40px; left:10px;}
+    #players {top:70px; left:10px;}
+    #timer {top:100px; left:10px;}
+    #overlay {
+      position:absolute; top:0; left:0; width:100%; height:100%;
+      background:rgba(0,0,0,0.8); color:white;
+      display:flex; justify-content:center; align-items:center;
+      flex-direction:column; font-size:30px; cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+
+<div id="score">Score: 0</div>
+<div id="length">Length: 6</div>
+<div id="players">Players: 1</div>
+<div id="timer">Time: 0s</div>
+<div id="overlay">Click para empezar</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+<script>
+  // ---------- ESCENA ----------
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x202020);
+
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // ---------- JUGADOR ----------
+  const playerGeom = new THREE.SphereGeometry(0.5,16,16);
+  const playerMat = new THREE.MeshBasicMaterial({color:0x00ff00});
+  const player = new THREE.Mesh(playerGeom, playerMat);
+  scene.add(player);
+
+  const segments = [];
+  for(let i=0;i<5;i++){
+    const geom = new THREE.SphereGeometry(0.4,16,16);
+    const mat = new THREE.MeshBasicMaterial({color:0x00ff00});
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.copy(player.position);
+    scene.add(mesh);
+    segments.push(mesh);
+  }
+
+  const light = new THREE.DirectionalLight(0xffffff, 0.8);
+  light.position.set(5,10,5);
+  scene.add(light);
+
+  const grid = new THREE.GridHelper(100,100);
+  scene.add(grid);
+
+  camera.position.y = 5;
+  camera.position.z = 5;
+
+  // ---------- MOUSE ----------
+  let mouse = {x:0,y:0};
+  window.addEventListener("mousemove", e=>{
+    mouse.x = (e.clientX/window.innerWidth)*2-1;
+    mouse.y = -(e.clientY/window.innerHeight)*2+1;
+  });
+
+  // ---------- RAYCASTER ----------
+  const raycaster = new THREE.Raycaster();
+  const planeY = new THREE.Plane(new THREE.Vector3(0,1,0),0);
+  function getMouseWorld(){
+    raycaster.setFromCamera(mouse, camera);
+    const inter = new THREE.Vector3();
+    raycaster.ray.intersectPlane(planeY, inter);
+    return inter;
+  }
+
+  // ---------- WEBSOCKET ----------
+  const socket = new WebSocket("wss://triumphantly-unpublic-brooklyn.ngrok-free.dev");
+  const otherPlayers = {};
+  const myId = Date.now() + Math.random();
+
+  socket.onopen = () => console.log("Conectado al servidor");
+
+  socket.onmessage = event => {
+    const data = JSON.parse(event.data);
+    for(let id in data){
+      if(id == myId) continue;
+      const p = data[id];
+      if(!otherPlayers[id]){
+        const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.5,16,16),
+                                    new THREE.MeshBasicMaterial({color:0xff0000}));
+        scene.add(mesh);
+        const segs = [];
+        for(let i=1;i<p.length;i++){
+          const s = new THREE.Mesh(new THREE.SphereGeometry(0.4,16,16),
+                                   new THREE.MeshBasicMaterial({color:0xff0000}));
+          s.position.set(p[i].x,p[i].y,p[i].z);
+          scene.add(s);
+          segs.push(s);
+        }
+        otherPlayers[id] = {mesh,segs};
+      }
+      otherPlayers[id].mesh.position.set(p[0].x,p[0].y,p[0].z);
+      otherPlayers[id].mesh.rotation.y = p[0].rotationY;
+      for(let i=1;i<p.length;i++){
+        otherPlayers[id].segs[i-1].position.lerp(new THREE.Vector3(p[i].x,p[i].y,p[i].z),0.3);
+      }
+    }
+  };
+
+  function sendPositions(){
+    if(socket.readyState !== WebSocket.OPEN) return;
+    const data = [];
+    data.push({x:player.position.x, y:player.position.y, z:player.position.z, rotationY:player.rotation.y, score});
+    for(let i=0;i<segments.length;i++){
+      data.push({x:segments[i].position.x, y:segments[i].position.y, z:segments[i].position.z});
+    }
+    socket.send(JSON.stringify(data));
+  }
+  setInterval(sendPositions,50);
+
+  // ---------- COMIDA ----------
+  const foodItems = [];
+  function spawnFood(special=false){
+    const geom = new THREE.SphereGeometry(special?0.5:0.3,8,8);
+    const mat = new THREE.MeshBasicMaterial({color:special?0xff00ff:0xffff00});
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.set((Math.random()-0.5)*50,0,(Math.random()-0.5)*50);
+    scene.add(mesh);
+    foodItems.push(mesh);
+  }
+  for(let i=0;i<20;i++) spawnFood();
+  setInterval(()=>spawnFood(true),10000); // comida especial cada 10s
+
+  // ---------- POWER-UPS ----------
+  const powerUps = [];
+  let speedBoost = false;
+  let invincible = false;
+
+  function spawnPowerUp(){
+    const geom = new THREE.BoxGeometry(0.5,0.5,0.5);
+    const mat = new THREE.MeshBasicMaterial({color:0x00ffff});
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.set((Math.random()-0.5)*50,0,(Math.random()-0.5)*50);
+    scene.add(mesh);
+    powerUps.push(mesh);
+  }
+  setInterval(spawnPowerUp,15000); // cada 15s
+
+  // ---------- UI ----------
+  const scoreDiv = document.getElementById("score");
+  const lengthDiv = document.getElementById("length");
+  const playersDiv = document.getElementById("players");
+  const timerDiv = document.getElementById("timer");
+  const overlay = document.getElementById("overlay");
+
+  let gameStarted = false;
+  overlay.addEventListener("click",()=>{
+    overlay.style.display = "none";
+    startGame();
+  });
+
+  function startGame(){
+    gameStarted = true;
+    startTime = Date.now();
+    score = 0;
+    segments.splice(5);
+    player.position.set(0,0,0);
+  }
+
+  // ---------- ANIMACIÓN ----------
+  let score = 0;
+  let highScore = 0;
+  const baseSpeed = 0.15;
+  const target = new THREE.Vector3();
+  const boundary = 25;
+  let startTime = Date.now();
+
+  function animate(){
+    requestAnimationFrame(animate);
+    if(!gameStarted) return;
+
+    // mover jugador hacia mouse
+    target.copy(getMouseWorld());
+    let dir = new THREE.Vector3().subVectors(target, player.position);
+    const dist = dir.length();
+    if(dist>0.05){
+      dir.normalize();
+      let moveSpeed = baseSpeed;
+      if(speedBoost) moveSpeed *= 2;
+      player.position.addScaledVector(dir, Math.min(moveSpeed, dist));
+      player.rotation.y += (Math.atan2(dir.x, dir.z)-player.rotation.y)*0.1;
+    }
+
+    // Limites del terreno
+    player.position.x = Math.max(-boundary, Math.min(boundary, player.position.x));
+    player.position.z = Math.max(-boundary, Math.min(boundary, player.position.z));
+
+    // mover segmentos
+    for(let i=segments.length-1;i>0;i--){
+      segments[i].position.lerp(segments[i-1].position,0.2);
+    }
+    segments[0].position.lerp(player.position,0.2);
+
+    // actualizar cámara
+    const camOffset = new THREE.Vector3(0,3,-5);
+    const rotOffset = camOffset.clone().applyAxisAngle(new THREE.Vector3(0,1,0),player.rotation.y);
+    camera.position.copy(player.position).add(rotOffset);
+    camera.lookAt(player.position);
+
+    // colisiones con comida
+    for(let i=foodItems.length-1;i>=0;i--){
+      if(player.position.distanceTo(foodItems[i].position)<0.6){
+        scene.remove(foodItems[i]);
+        foodItems.splice(i,1);
+
+        const geom = new THREE.SphereGeometry(0.4,16,16);
+        const mat = new THREE.MeshBasicMaterial({color:0x00ff00});
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.copy(segments[segments.length-1].position);
+        scene.add(mesh);
+        segments.push(mesh);
+
+        score += 1;
+        scoreDiv.innerText = `Score: ${score}`;
+        spawnFood();
+      }
+    }
+
+    // colisiones con power-ups
+    for(let i=powerUps.length-1;i>=0;i--){
+      if(player.position.distanceTo(powerUps[i].position)<0.6){
+        scene.remove(powerUps[i]);
+        powerUps.splice(i,1);
+        if(Math.random()<0.5){
+          speedBoost = true;
+          setTimeout(()=> speedBoost=false,5000);
+        }else{
+          invincible = true;
+          setTimeout(()=> invincible=false,5000);
+        }
+      }
+    }
+
+    // colisiones con otros jugadores
+    for(let id in otherPlayers){
+      const other = otherPlayers[id];
+      for(let i=0;i<other.segs.length;i++){
+        if(player.position.distanceTo(other.segs[i].position)<0.5 && !invincible){
+          segments.pop();
+          if(segments.length===0) resetPlayer();
+        }
+      }
+      if(player.position.distanceTo(other.mesh.position)<0.5 && !invincible){
+        segments.pop();
+        if(segments.length===0) resetPlayer();
+      }
+    }
+
+    // actualizar UI
+    lengthDiv.innerText = `Length: ${segments.length+1}`;
+    playersDiv.innerText = `Players: ${Object.keys(otherPlayers).length+1}`;
+    timerDiv.innerText = `Time: ${Math.floor((Date.now()-startTime)/1000)}s`;
+
+    renderer.render(scene, camera);
+  }
+
+  function resetPlayer(){
+    alert("¡Colisión! Game Over");
+    if(score>highScore) highScore = score;
+    console.log("High Score:", highScore);
+
+    player.position.set(0,0,0);
+    for(let i=0;i<segments.length;i++){
+      segments[i].position.copy(player.position);
+    }
+    segments.splice(5);
+    score = 0;
+    scoreDiv.innerText = `Score: ${score}`;
+    overlay.style.display="flex";
+    gameStarted=false;
+  }
+
+  animate();
+
+  window.addEventListener("resize",()=>{
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+</script>
+
+</body>
+</html>
