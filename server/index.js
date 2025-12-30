@@ -30,10 +30,12 @@ wss.on("connection", ws => {
   });
 
   ws.on("close",()=>{
-    if(ws.playerId){
-      players[ws.playerId].alive = false;
+    if(ws.playerId && players[ws.playerId]){
+      delete players[ws.playerId];
+      console.log("Jugador desconectado:", ws.playerId);
     }
   });
+
 });
 
 // -------- BROADCAST --------
